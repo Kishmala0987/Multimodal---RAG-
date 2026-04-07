@@ -6,9 +6,9 @@ from pypdf import PdfReader
 import backend
 
 
-# -----------------------------
-# Helpers
-# -----------------------------
+# ==============================
+# HELPERS
+# ==============================
 
 def display_image_base64(img):
     image_data = base64.b64decode(img)
@@ -24,17 +24,15 @@ def show_pdf_page(file, page_number):
     reader = PdfReader(file)
     page = reader.pages[page_number - 1]
     text = page.extract_text()
-
-    st.subheader(f"📄 Page {page_number}")
+    st.caption(f"Page {page_number}")
     st.text(text[:2000])
 
 
-# -----------------------------
-# Main App
-# -----------------------------
+# ==============================
+# MAIN APP
+# ==============================
 
 def main():
-
     load_dotenv()
 
     os.environ["OPENAI_API_KEY"] = os.getenv("OPENROUTER_API_KEY")
@@ -50,44 +48,27 @@ def main():
 
     pdf = st.file_uploader("Upload PDF", type="pdf")
 
-    # --------------------------------
-    # Process PDF
-    # --------------------------------
+    # ==============================
+    # PROCESS PDF
+    # ==============================
 
     if pdf and "rag_ready" not in st.session_state:
-
         with st.spinner("Processing PDF..."):
-
             pdf_hash = backend.get_pdf_hash(pdf)
-
             chunks = backend.process_pdf(pdf, pdf_hash)
-
             texts, tables, images = backend.separate_elements(chunks)
 
-            st.write("Text chunks:", len(texts))
-            st.write("Tables:", len(tables))
-            st.write("Images:", len(images))
+            st.write(f"Text chunks: {len(texts)} | Tables: {len(tables)} | Images: {len(images)}")
 
-            text_summaries, table_summaries = backend.create_text_table_summaries(
-                texts, tables
-            )
-
+            text_summaries, table_summaries = backend.create_text_table_summaries(texts, tables)
             image_summaries = backend.create_image_summaries(images)
 
             vectorstore, docstore = backend.build_vectorstore(
-                texts,
-                tables,
-                images,
-                text_summaries,
-                table_summaries,
-                image_summaries
+                texts, tables, images,
+                text_summaries, table_summaries, image_summaries
             )
 
-            retriever = backend.MultiModalRetriever(
-                vectorstore,
-                docstore
-            )
-
+            retriever = backend.MultiModalRetriever(vectorstore, docstore)
             chain = backend.build_chain(retriever)
 
             st.session_state.chain = chain
@@ -96,121 +77,89 @@ def main():
 
         st.success("PDF indexed successfully!")
 
-    # --------------------------------
-    # Chat Interface
-    # --------------------------------
+    # ==============================
+    # CHAT — FULL WIDTH
+    # ==============================
 
     if "rag_ready" in st.session_state:
 
-        chat_col, source_col = st.columns([2, 1])
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
 
-        # ==============================
-        # LEFT SIDE → CHAT
-        # ==============================
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-        with chat_col:
+        query = st.chat_input("Ask about the paper")
 
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
+        if query:
+            st.session_state.messages.append({"role": "user", "content": query})
+            with st.chat_message("user"):
+                st.markdown(query)
 
-            for msg in st.session_state.messages:
-
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-
-            query = st.chat_input("Ask about the paper")
-
-            if query:
-
-                st.session_state.messages.append(
-                    {"role": "user", "content": query}
-                )
-
-                with st.chat_message("user"):
-                    st.markdown(query)
-
+            with st.spinner("Thinking..."):
                 result = st.session_state.chain.invoke(query)
 
-                answer = result["response"]
-                citations = result["citations"]
-                context = result["context"]
+            answer   = result["response"]
+            citations = result["citations"]
+            context  = result["context"]
 
-                with st.chat_message("assistant"):
-                    st.markdown(answer)
+            with st.chat_message("assistant"):
+                st.markdown(answer)
 
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer}
-                )
-
-                st.session_state.last_sources = citations
-                st.session_state.last_context = context
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+            st.session_state.last_citations = citations
+            st.session_state.last_context   = context
 
         # ==============================
-        # RIGHT SIDE → SOURCES
+        # SOURCES — ACCORDION BELOW CHAT
         # ==============================
 
-        with source_col:
+        if "last_citations" in st.session_state:
+            citations = st.session_state.last_citations
+            context   = st.session_state.last_context
 
-            if "last_sources" in st.session_state:
+            st.divider()
+            st.subheader("📚 Sources")
 
-                citations = st.session_state.last_sources
-                context = st.session_state.last_context
-
-                st.subheader("📚 Sources")
-
+            # ---------- Page Citations ----------
+            with st.expander("📄 Page Citations", expanded=True):
                 if citations["pages"]:
-                    for p in citations["pages"]:
-                        st.write("📄 Page", p)
+                    badges = " · ".join(f"Page {p}" for p in citations["pages"])
+                    st.markdown(f"`{badges}`")
+                else:
+                    st.write("No page citations found.")
 
                 if citations["tables"]:
-                    for t in citations["tables"]:
-                        st.write("📊 Table Page", t)
+                    st.caption("Tables on pages: " + ", ".join(str(t) for t in citations["tables"]))
 
                 if citations["figures"]:
-                    for f in citations["figures"]:
-                        st.write("🖼 Figure Page", f)
+                    st.caption("Figures on pages: " + ", ".join(str(f) for f in citations["figures"]))
 
-                st.divider()
+            # ---------- Figures ----------
+            with st.expander("🖼️ Figures", expanded=False):
+                if context.get("image"):
+                    cols = st.columns(2)
+                    for i, img in enumerate(context["image"]):
+                        with cols[i % 2]:
+                            display_image_base64(img)
+                else:
+                    st.write("No figures retrieved for this query.")
 
-                # --------------------------
-                # Images
-                # --------------------------
-
-                if context["image"]:
-
-                    st.subheader("🖼 Figures")
-
-                    for img in context["image"]:
-                        display_image_base64(img)
-
-                # --------------------------
-                # Tables
-                # --------------------------
-
-                st.subheader("📊 Tables")
-
-                for doc in context["text"]:
+            # ---------- Tables ----------
+            with st.expander("📊 Tables", expanded=False):
+                found_table = False
+                for doc in context.get("text", []):
                     if hasattr(doc, "metadata"):
-
                         for el in doc.metadata.orig_elements or []:
-
                             if "Table" in str(type(el)):
                                 display_table(el)
+                                st.divider()
+                                found_table = True
+                if not found_table:
+                    st.write("No tables retrieved for this query.")
 
-                # --------------------------
-                # PDF Viewer
-                # --------------------------
 
-                if citations["pages"]:
-
-                    st.subheader("📄 PDF Page")
-
-                    page = st.selectbox(
-                        "View page",
-                        citations["pages"]
-                    )
-
-                    show_pdf_page(st.session_state.pdf_file, page)
 
 
 if __name__ == "__main__":

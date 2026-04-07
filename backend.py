@@ -37,7 +37,8 @@ summary_model = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY")
 )
 vision_model = ChatOpenAI(
-    model="gpt-4o-mini"
+    model="gpt-4o-mini",
+    max_tokens = 500
 )
 parser = StrOutputParser()
 
@@ -282,8 +283,8 @@ def build_prompt(kwargs):
             context_text += t + "\n"
 
     prompt_template = """
-Answer the question based only on the following context, which may include text, tables, and image summaries.
-If the answer cannot be found in the context, say "I don't know."
+You are a research assistant. Answer using ONLY the context below (text, tables, image summaries).
+Be brief, concise and specific. If the answer isn't in the context, say "I don't know."
 
 Context:
 {context}
@@ -302,7 +303,7 @@ Page Y
 
 
 def extract_citations(docs):
-    pages, figures, tables = set(), [], []
+    pages, figures, tables = set(), set(), set()
 
     for doc in docs:
         if hasattr(doc, "metadata") and hasattr(doc.metadata, "orig_elements"):
@@ -310,9 +311,9 @@ def extract_citations(docs):
                 if hasattr(el.metadata, "page_number"):
                     pages.add(el.metadata.page_number)
                 if "Image" in str(type(el)):
-                    figures.append(el.metadata.page_number)
+                    figures.add(el.metadata.page_number)
                 if "Table" in str(type(el)):
-                    tables.append(el.metadata.page_number)
+                    tables.add(el.metadata.page_number)
 
     return {"pages": sorted(list(pages)), "figures": figures, "tables": tables}
 
@@ -322,7 +323,10 @@ def extract_citations(docs):
 # ==============================
 
 def build_chain(retriever):
-    qa_model = ChatOpenAI(model="gpt-4o-mini")
+    qa_model = ChatGroq(
+        model="llama-3.1-8b-instant",
+        api_key=os.getenv("GROQ_API_KEY")
+    )
 
     chain = (
         {
